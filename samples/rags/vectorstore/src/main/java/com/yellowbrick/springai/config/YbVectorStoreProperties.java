@@ -11,6 +11,7 @@ public class YbVectorStoreProperties extends CommonVectorStoreProperties {
     private String schemaName;
     private int maxDocumentBatchSize;
 
+
     public YbVectorStoreProperties() {
         this.removeExistingVectorStoreTable = false;
         this.tableName = "vector_store";

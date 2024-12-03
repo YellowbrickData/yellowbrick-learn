@@ -10,8 +10,10 @@ import org.springframework.ai.embedding.BatchingStrategy;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.EmbeddingOptionsBuilder;
 
+import org.springframework.ai.embedding.TokenCountBatchingStrategy;
 import org.springframework.ai.observation.conventions.VectorStoreProvider;
 import org.springframework.ai.vectorstore.SearchRequest;
+import org.springframework.ai.vectorstore.filter.FilterExpressionConverter;
 import org.springframework.ai.vectorstore.observation.AbstractObservationVectorStore;
 import org.springframework.ai.vectorstore.observation.VectorStoreObservationContext;
 import org.springframework.ai.vectorstore.observation.VectorStoreObservationConvention;
@@ -20,16 +22,16 @@ import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.StatementCreatorUtils;
+import org.springframework.lang.Nullable;
 import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.TransactionManager;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.util.StringUtils;
 
 
 import java.sql.*;
 import java.util.*;
-import java.util.concurrent.atomic.AtomicInteger;
 
 public class YellowBrickVectorStore extends AbstractObservationVectorStore implements InitializingBean {
     private static final Logger logger = LoggerFactory.getLogger(YellowBrickVectorStore.class);
@@ -42,6 +44,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     private final boolean initializeSchema;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    public final FilterExpressionConverter filterExpressionConverter = new YbVectorFilterExpressionConverter();
 
     private Logger log = LoggerFactory.getLogger(YellowBrickVectorStore.class);
 
@@ -67,7 +70,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     public void doAdd(List<Document> documents) {
         this.embeddingModel.embed(documents, EmbeddingOptionsBuilder.builder().build(), this.batchingStrategy);
         List<List<Document>> batchedDocuments = this.batchDocuments(documents);
-        batchedDocuments.forEach(this::insertOrUpdateBatch);
+        batchedDocuments.forEach(this::insertOrUpdateContent);
     }
 
     private String toJson(Map<String, Object> map) {
@@ -80,7 +83,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     }
 
     private void insertOrUpdateEmbeddings(float[] embeddings, String doc_id) {
-        String sql = "INSERT INTO " + getContentTableName() + "(doc_id, embedding_id, embedding) VALUES (?, ?,?)";
+        String sql = "INSERT INTO " + getTableName() + "(doc_id, embedding_id, embedding) VALUES (?, ?,?)";
 
         this.jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
 
@@ -100,8 +103,8 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
 
     }
 
-    private void insertOrUpdateBatch(List<Document> batch) {
-        String sql = "INSERT INTO " + this.getTableName() + " (doc_id, text, metadata) VALUES (?, ?, ?)";
+    private void insertOrUpdateContent(List<Document> batch) {
+        String sql = "INSERT INTO " + this.getContentTableName() + " (doc_id, text, metadata) VALUES (?, ?, ? ::jsonb )";
 
         this.jdbcTemplate.batchUpdate(sql, new BatchPreparedStatementSetter() {
 
@@ -152,18 +155,30 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     @Override
     public List<Document> doSimilaritySearch(SearchRequest request) {
         //create embeddings out of the search request
+
+        String nativeFilterExpression = (request.getFilterExpression() != null)
+                ? this.filterExpressionConverter.convertExpression(request.getFilterExpression()) : "";
+
+
+
         float[] embeddings = this.getQueryEmbedding(request.getQuery());
         UUID searchDocumentId = UUID.randomUUID();
 
-        List<Document> query = (List<Document>) transactionTemplate.execute(new TransactionCallback() {
+        List<Document> query = (List<Document>) transactionTemplate.execute(new TransactionCallback<List<Document>>() {
             @Override
-            public Object doInTransaction(TransactionStatus status) {
-                log.info("doing in transaction");
+            public List<Document> doInTransaction(TransactionStatus status) {
+
+                String jsonPathFilter = "";
+
+                if (StringUtils.hasText(nativeFilterExpression)) {
+                    jsonPathFilter =  nativeFilterExpression;
+                }
+
                 createTemporaryTable(searchDocumentId, embeddings);
 
                 insertSearchDocEmbeddings(searchDocumentId, embeddings);
 
-                List<Document> query = getDocuments(searchDocumentId);
+                List<Document> query = getDocuments(searchDocumentId,jsonPathFilter);
 
                 cleanUpTempTable(searchDocumentId);
                 return query;
@@ -192,7 +207,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         });
     }
 
-    private List<Document> getDocuments(UUID searchDocumentId) {
+    private List<Document> getDocuments(UUID searchDocumentId, String filterString) {
         String selectSQL = " SELECT " +
                 "        text," +
                 "         metadata," +
@@ -215,6 +230,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
                 " INNER JOIN" +
                 " " + getContentTableName()+" v3" +
                 " ON v4.doc_id = v3.doc_id" +
+                " WHERE " + filterString +
                 " ORDER BY score DESC";
 
         List<Document> query = jdbcTemplate.query(selectSQL, new RowMapper<Document>() {
@@ -281,6 +297,8 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         } else {
             if (this.removeExistingVectorStoreTable) {
                 this.jdbcTemplate.execute(String.format("DROP TABLE IF EXISTS %s", this.getTableName()));
+                this.jdbcTemplate.execute(String.format("DROP TABLE IF EXISTS %s", this.getContentTableName()));
+
             }
 
             String c = getTableName() + "_pk_doc_id";
@@ -289,7 +307,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
                             "              CREATE TABLE IF NOT EXISTS %s (\n" +
                             "                doc_id UUID NOT NULL,\n" +
                             "                text VARCHAR(60000) NOT NULL,\n" +
-                            "                metadata VARCHAR(1024) NOT NULL,\n" +
+                            "                metadata json NOT NULL,\n" +
                             "                CONSTRAINT %s PRIMARY KEY (doc_id))\n" +
                             "                DISTRIBUTE ON (doc_id) SORT ON (doc_id)"
                     , this.getContentTableName(), c));
@@ -316,5 +334,92 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
 
     private String getQueryTableName() {
         return this.vectorTableName + "_query";
+    }
+
+    public static class Builder {
+        private final JdbcTemplate jdbcTemplate;
+        private final EmbeddingModel embeddingModel;
+        private String schemaName = "public";
+        private String vectorTableName;
+        private boolean vectorTableValidationsEnabled = false;
+        private int dimensions = -1;
+        private boolean removeExistingVectorStoreTable;
+        private boolean initializeSchema;
+        private ObservationRegistry observationRegistry;
+        private BatchingStrategy batchingStrategy;
+        private int maxDocumentBatchSize;
+        @Nullable
+        private VectorStoreObservationConvention searchObservationConvention;
+        private PlatformTransactionManager transactionManager = null;
+
+        public Builder(JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel) {
+            this.removeExistingVectorStoreTable = false;
+            this.observationRegistry = ObservationRegistry.NOOP;
+            this.batchingStrategy = new TokenCountBatchingStrategy();
+            this.maxDocumentBatchSize = 10000;
+            if (jdbcTemplate != null && embeddingModel != null) {
+                this.jdbcTemplate = jdbcTemplate;
+                this.embeddingModel = embeddingModel;
+            } else {
+                throw new IllegalArgumentException("JdbcTemplate and EmbeddingModel must not be null");
+            }
+        }
+
+        public Builder withSchemaName(String schemaName) {
+            this.schemaName = schemaName;
+            return this;
+        }
+
+        public Builder withVectorTableName(String vectorTableName) {
+            this.vectorTableName = vectorTableName;
+            return this;
+        }
+
+        public Builder withVectorTableValidationsEnabled(boolean vectorTableValidationsEnabled) {
+            this.vectorTableValidationsEnabled = vectorTableValidationsEnabled;
+            return this;
+        }
+
+        public Builder withDimensions(int dimensions) {
+            this.dimensions = dimensions;
+            return this;
+        }
+
+
+        public Builder withRemoveExistingVectorStoreTable(boolean removeExistingVectorStoreTable) {
+            this.removeExistingVectorStoreTable = removeExistingVectorStoreTable;
+            return this;
+        }
+
+
+        public Builder withInitializeSchema(boolean initializeSchema) {
+            this.initializeSchema = initializeSchema;
+            return this;
+        }
+
+        public Builder withObservationRegistry(ObservationRegistry observationRegistry) {
+            this.observationRegistry = observationRegistry;
+            return this;
+        }
+
+        public Builder withSearchObservationConvention(VectorStoreObservationConvention customObservationConvention) {
+            this.searchObservationConvention = customObservationConvention;
+            return this;
+        }
+
+        public Builder withBatchingStrategy(BatchingStrategy batchingStrategy) {
+            this.batchingStrategy = batchingStrategy;
+            return this;
+        }
+
+        public Builder withMaxDocumentBatchSize(int maxDocumentBatchSize) {
+            this.maxDocumentBatchSize = maxDocumentBatchSize;
+            return this;
+        }
+
+        public YellowBrickVectorStore build() {
+            return new YellowBrickVectorStore( this.vectorTableName, this.jdbcTemplate, this.embeddingModel, true, this.observationRegistry, this.searchObservationConvention, this.batchingStrategy, this.maxDocumentBatchSize, this.transactionManager);
+        }
+
     }
 }
