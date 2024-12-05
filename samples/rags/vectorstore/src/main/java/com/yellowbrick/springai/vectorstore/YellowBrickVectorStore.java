@@ -174,7 +174,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
                 String jsonPathFilter = "";
 
                 if (StringUtils.hasText(nativeFilterExpression)) {
-                    jsonPathFilter =  nativeFilterExpression;
+                    jsonPathFilter =  "AND (" + nativeFilterExpression +")";
                 }
 
                 createTemporaryTable(searchDocumentId, embeddings);
@@ -211,6 +211,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     }
 
     private List<Document> getDocuments(UUID searchDocumentId, String filterString, int topK) {
+
         String selectSQL = " SELECT " +
                 "        text," +
                 "         metadata," +
@@ -234,8 +235,10 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
                 " INNER JOIN" +
                 " " + getContentTableName()+" v3" +
                 " ON v4.doc_id = v3.doc_id" +
-                //" WHERE " + filterString +
+                " WHERE 1=1" + filterString +
                 " ORDER BY score DESC";
+
+                //1=1 to avoid situation where filter is empty string
 
         List<Document> query = jdbcTemplate.query(selectSQL, new RowMapper<Document>() {
 
@@ -360,13 +363,9 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
             this.observationRegistry = ObservationRegistry.NOOP;
             this.batchingStrategy = new TokenCountBatchingStrategy();
             this.maxDocumentBatchSize = 10000;
-            if (jdbcTemplate != null && embeddingModel != null) {
-                this.jdbcTemplate = jdbcTemplate;
-                this.embeddingModel = embeddingModel;
-            } else {
+            this.jdbcTemplate = jdbcTemplate;
+            this.embeddingModel = embeddingModel;
 
-                throw new IllegalArgumentException("JdbcTemplate and EmbeddingModel must not be null");
-            }
         }
 
         public Builder withSchemaName(String schemaName) {
