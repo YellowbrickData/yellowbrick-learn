@@ -45,7 +45,6 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     public final FilterExpressionConverter filterExpressionConverter = new YbVectorFilterExpressionConverter();
-    private Logger log = LoggerFactory.getLogger(YellowBrickVectorStore.class);
 
     public YellowBrickVectorStore(String vectorTableName, JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel, boolean initializeSchema, boolean dropSchema, ObservationRegistry observationRegistry, VectorStoreObservationConvention observationConvention, BatchingStrategy batchingStrategy, int maxDocumentBatchSize, PlatformTransactionManager transactionManager) {
         super(observationRegistry, observationConvention);
@@ -183,7 +182,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
 
                 List<Document> query = getDocuments(searchDocumentId,jsonPathFilter,topK);
 
-                cleanUpTempTable(searchDocumentId);
+               // cleanUpTempTable(searchDocumentId);
                 return query;
             }
 
@@ -345,10 +344,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     public static class Builder {
         private final JdbcTemplate jdbcTemplate;
         private final EmbeddingModel embeddingModel;
-        private String schemaName = "public";
         private String vectorTableName;
-        private boolean vectorTableValidationsEnabled = false;
-        private int dimensions = -1;
         private boolean removeExistingVectorStoreTable;
         private boolean initializeSchema;
         private ObservationRegistry observationRegistry;
@@ -368,25 +364,12 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
 
         }
 
-        public Builder withSchemaName(String schemaName) {
-            this.schemaName = schemaName;
-            return this;
-        }
 
         public Builder withVectorTableName(String vectorTableName) {
             this.vectorTableName = vectorTableName;
             return this;
         }
 
-        public Builder withVectorTableValidationsEnabled(boolean vectorTableValidationsEnabled) {
-            this.vectorTableValidationsEnabled = vectorTableValidationsEnabled;
-            return this;
-        }
-
-        public Builder withDimensions(int dimensions) {
-            this.dimensions = dimensions;
-            return this;
-        }
 
 
         public Builder withRemoveExistingVectorStoreTable(boolean removeExistingVectorStoreTable) {

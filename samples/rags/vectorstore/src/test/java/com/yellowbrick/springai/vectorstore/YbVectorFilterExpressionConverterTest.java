@@ -29,7 +29,7 @@ class YbVectorFilterExpressionConverterTest {
         var b = new FilterExpressionBuilder();
 
         String vectorExpr = converter.convertExpression(b.eq("file_name","EmployeeHandbook.odf").build());
-        assertThat(vectorExpr).isEqualTo("metadata:file_name::varchar = 'EmployeeHandbook.odf'");
+        assertThat(vectorExpr).isEqualTo("metadata:$.file_name::varchar = 'EmployeeHandbook.odf'");
         System.out.println(vectorExpr);
     }
 

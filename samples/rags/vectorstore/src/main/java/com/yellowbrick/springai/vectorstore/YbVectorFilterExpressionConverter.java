@@ -91,7 +91,7 @@ public class YbVectorFilterExpressionConverter extends AbstractFilterExpressionC
 
     @Override
     protected void doKey(Key key, StringBuilder context) {
-        context.append("metadata:" + key.key()+"::varchar");
+        context.append("metadata:$." + key.key()+"::varchar");
     }
 
     @Override

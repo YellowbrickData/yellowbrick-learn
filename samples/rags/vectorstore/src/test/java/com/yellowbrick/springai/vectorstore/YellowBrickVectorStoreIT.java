@@ -18,6 +18,7 @@ import org.springframework.ai.openai.OpenAiEmbeddingModel;
 import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.ai.vectorstore.observation.VectorStoreObservationConvention;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.SpringBootConfiguration;
@@ -57,9 +58,11 @@ public class YellowBrickVectorStoreIT {
                     "spring.ai.vectorstore.ybvector.remove-existing-vector-store-table=true");
 
     List<Document> documents = List.of(
-            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/spring.ai.txt"), Map.of("meta1", "meta1")),
-            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/time.shelter.txt"), Map.of()),
-            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/great.depression.txt"), Map.of("meta2", "meta2")));
+            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/spring.ai.txt"), Map.of("file_name","spring.ai.txt","meta", "meta1")),
+            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/time.shelter.txt"), Map.of("file_name","time.shelter.txt","meta", "none")),
+            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/great.depression.txt"), Map.of("file_name","great.depression.txt","meta", "meta2")),
+            new Document(UUID.randomUUID().toString(), getText("classpath:/test/data/great.depression.txt"), Map.of("file_name","great.depression2.txt","meta", "meta3"))
+);
 
 
 
@@ -76,22 +79,40 @@ public class YellowBrickVectorStoreIT {
     @Test
     public void addAndSearchTest() {
         this.contextRunner.run(context -> {
-            this.documents.forEach(System.out::println);
             VectorStore vectorStore = context.getBean(VectorStore.class);
             vectorStore.add(documents);
 
             List<Document> results = vectorStore.similaritySearch(SearchRequest.query("Great Depression").withTopK(1));
             assertThat(results).hasSize(1);
             Document resultDoc = results.get(0);
-            assertThat(resultDoc.getId()).isEqualTo(this.documents.get(2).getId());
             assertThat(resultDoc.getContent()).contains("The Great Depression (1929–1939) was an economic shock");
-            assertThat(resultDoc.getMetadata()).hasSize(1);
-            assertThat(resultDoc.getMetadata()).containsKey("meta2");
+            assertThat(resultDoc.getMetadata()).hasSize(2);
+            assertThat(resultDoc.getMetadata()).containsKey("meta");
 
         });
     }
 
+    @Test
+    public void addAndSearchTestWithFilter() {
+        this.contextRunner.run(context -> {
+            VectorStore vectorStore = context.getBean(VectorStore.class);
+            var b = new FilterExpressionBuilder();
+            var exp = b.eq("meta", "meta2").build();
 
+
+            vectorStore.add(documents);
+
+
+            List<Document> results = vectorStore.similaritySearch(SearchRequest.query("Great Depression").withFilterExpression(exp).withTopK(2));
+            assertThat(results).hasSize(1);
+            Document resultDoc = results.get(0);
+            assertThat(resultDoc.getId()).isEqualTo(this.documents.get(2).getId());
+            assertThat(resultDoc.getContent()).contains("The Great Depression (1929–1939) was an economic shock");
+            assertThat(resultDoc.getMetadata()).hasSize(2);
+            assertThat(resultDoc.getMetadata()).containsKey("meta");
+
+        });
+    }
     @SpringBootConfiguration
     @EnableAutoConfiguration(exclude = { DataSourceAutoConfiguration.class, OpenAiAutoConfiguration.class })
     public static class TestApplication {
