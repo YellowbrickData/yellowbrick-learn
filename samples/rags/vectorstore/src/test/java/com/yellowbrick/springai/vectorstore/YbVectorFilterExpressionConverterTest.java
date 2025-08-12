@@ -39,7 +39,7 @@ class YbVectorFilterExpressionConverterTest {
         String vectorExpr = this.converter
                 .convertExpression(new Expression(AND, new Expression(EQ, new Key("genre"), new Value("drama")),
                         new Expression(GTE, new Key("year"), new Value(2020))));
-        assertThat(vectorExpr).isEqualTo("metadata:genre::varchar = 'drama' AND metadata:year::varchar >= 2020");
+        assertThat(vectorExpr).isEqualTo("metadata:$.genre::varchar = 'drama' AND metadata:$.year::varchar >= 2020");
     }
 
     @Test
@@ -48,7 +48,7 @@ class YbVectorFilterExpressionConverterTest {
         String vectorExpr = this.converter.convertExpression(
                 new Expression(IN, new Key("genre"), new Value(List.of("comedy", "documentary", "drama"))));
         assertThat(vectorExpr)
-                .isEqualTo("(metadata:genre::varchar = 'comedy' OR metadata:genre::varchar = 'documentary' OR metadata:genre::varchar = 'drama')");
+                .isEqualTo("(metadata:$.genre::varchar = 'comedy' OR metadata:$.genre::varchar = 'documentary' OR metadata:$.genre::varchar = 'drama')");
     }
 
     @Test
@@ -58,7 +58,7 @@ class YbVectorFilterExpressionConverterTest {
                 .convertExpression(new Expression(OR, new Expression(GTE, new Key("year"), new Value(2020)),
                         new Expression(AND, new Expression(EQ, new Key("country"), new Value("BG")),
                                 new Expression(NE, new Key("city"), new Value("Sofia")))));
-        assertThat(vectorExpr).isEqualTo("metadata:year::varchar >= 2020 OR metadata:country::varchar = 'BG' AND metadata:city::varchar != 'Sofia'");
+        assertThat(vectorExpr).isEqualTo("metadata:$.year::varchar >= 2020 OR metadata:$.country::varchar = 'BG' AND metadata:$.city::varchar != 'Sofia'");
     }
 
     @Test
@@ -69,6 +69,6 @@ class YbVectorFilterExpressionConverterTest {
                         new Expression(EQ, new Key("country"), new Value("BG")))),
                 new Expression(NIN, new Key("city"), new Value(List.of("Sofia", "Plovdiv")))));
         assertThat(vectorExpr)
-                .isEqualTo("(metadata:year::varchar >= 2020 OR metadata:country::varchar = 'BG') AND !(metadata:city::varchar = 'Sofia' OR metadata:city::varchar = 'Plovdiv')");
+                .isEqualTo("(metadata:$.year::varchar >= 2020 OR metadata:$.country::varchar = 'BG') AND !(metadata:$.city::varchar = 'Sofia' OR metadata:$.city::varchar = 'Plovdiv')");
     }
 }
