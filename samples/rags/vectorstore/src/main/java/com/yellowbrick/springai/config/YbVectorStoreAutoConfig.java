@@ -1,5 +1,7 @@
 package com.yellowbrick.springai.config;
 
+import com.yellowbrick.springai.vectorstore.CosineSimilarityTempTableStrategy;
+import com.yellowbrick.springai.vectorstore.DocumentRetrievalStrategy;
 import com.yellowbrick.springai.vectorstore.YellowBrickVectorStore;
 import io.micrometer.observation.ObservationRegistry;
 import org.springframework.ai.embedding.BatchingStrategy;
@@ -31,6 +33,12 @@ public class YbVectorStoreAutoConfig {
     }
 
     @Bean
+    @ConditionalOnMissingBean({DocumentRetrievalStrategy.class})
+    DocumentRetrievalStrategy documentRetrievalStrategy() {
+        return new CosineSimilarityTempTableStrategy();
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     YellowBrickVectorStore ybvectorStore(JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel, YbVectorStoreProperties properties, ObjectProvider<ObservationRegistry> observationRegistry, ObjectProvider<VectorStoreObservationConvention> customObservationConvention, BatchingStrategy batchingStrategy, PlatformTransactionManager platformTransactionManager) {
         return new YellowBrickVectorStore( properties.getTableName(), jdbcTemplate, embeddingModel, properties.isInitializeSchema(), properties.isRemoveExistingVectorStoreTable(),
@@ -39,7 +47,7 @@ public class YbVectorStoreAutoConfig {
                 }),
                 (VectorStoreObservationConvention) customObservationConvention.getIfAvailable(() -> {
                     return null;
-                }), batchingStrategy, properties.getMaxDocumentBatchSize(),platformTransactionManager);
+                }), batchingStrategy, properties.getMaxDocumentBatchSize(),platformTransactionManager,documentRetrievalStrategy());
 
     }
 }

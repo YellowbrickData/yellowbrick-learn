@@ -45,8 +45,9 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     public final FilterExpressionConverter filterExpressionConverter = new YbVectorFilterExpressionConverter();
+    private final DocumentRetrievalStrategy retrievalStrategy;
 
-    public YellowBrickVectorStore(String vectorTableName, JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel, boolean initializeSchema, boolean dropSchema, ObservationRegistry observationRegistry, VectorStoreObservationConvention observationConvention, BatchingStrategy batchingStrategy, int maxDocumentBatchSize, PlatformTransactionManager transactionManager) {
+    public YellowBrickVectorStore(String vectorTableName, JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel, boolean initializeSchema, boolean dropSchema, ObservationRegistry observationRegistry, VectorStoreObservationConvention observationConvention, BatchingStrategy batchingStrategy, int maxDocumentBatchSize, PlatformTransactionManager transactionManager, DocumentRetrievalStrategy retrievalStrategy) {
         super(observationRegistry, observationConvention);
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingModel = embeddingModel;
@@ -57,6 +58,9 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         this.removeExistingVectorStoreTable = dropSchema;
         this.objectMapper = new ObjectMapper();
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.retrievalStrategy = retrievalStrategy;
+
+        ;
 
 
     }
@@ -71,6 +75,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         this.embeddingModel.embed(documents, EmbeddingOptionsBuilder.builder().build(), this.batchingStrategy);
         List<List<Document>> batchedDocuments = this.batchDocuments(documents);
         batchedDocuments.forEach(this::insertOrUpdateContent);
+        retrievalStrategy.onDocumentsAdded(this, documents);
     }
 
     private String toJson(Map<String, Object> map) {
@@ -148,20 +153,16 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
                 .count();
 
         logger.info("records deleted {}",count);
+        retrievalStrategy.onDocumentsDeleted(this, idList);
         //todo total deleted records and return true if total=sizeof(idList)
         return Optional.of(true);
     }
 
     @Override
     public List<Document> doSimilaritySearch(SearchRequest request) {
-
-       int topK = request.getTopK();
-        //create embeddings out of the search request
-
+        int topK = request.getTopK();
         String nativeFilterExpression = (request.getFilterExpression() != null)
                 ? this.filterExpressionConverter.convertExpression(request.getFilterExpression()) : "";
-
-
 
         float[] embeddings = this.getQueryEmbedding(request.getQuery());
         UUID searchDocumentId = UUID.randomUUID();
@@ -169,27 +170,19 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         List<Document> query = (List<Document>) transactionTemplate.execute(new TransactionCallback<List<Document>>() {
             @Override
             public List<Document> doInTransaction(TransactionStatus status) {
-
                 String jsonPathFilter = "";
 
                 if (StringUtils.hasText(nativeFilterExpression)) {
-                    jsonPathFilter =  "AND (" + nativeFilterExpression +")";
+                    jsonPathFilter = "AND (" + nativeFilterExpression + ")";
                 }
 
-                createTemporaryTable(searchDocumentId, embeddings);
-
-                insertSearchDocEmbeddings(searchDocumentId, embeddings);
-
-                List<Document> query = getDocuments(searchDocumentId,jsonPathFilter,topK);
-
-               // cleanUpTempTable(searchDocumentId);
-                return query;
+                // Delegate to the injected strategy
+                return retrievalStrategy.getDocuments(searchDocumentId, embeddings, jsonPathFilter, topK, YellowBrickVectorStore.this);
             }
-
-
         });
         return query;
     }
+
 
     private void insertSearchDocEmbeddings(UUID searchDocumentId, float[] embeddings) {
         String insertTemp = "INSERT INTO "+ getQueryTableName() + " (doc_id, embedding_id, embedding) VALUES (?,?,?)";
@@ -328,17 +321,21 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         }
     }
 
-    private String getTableName() {
+    public String getTableName() {
         return this.vectorTableName;
     }
 
 
-    private String getContentTableName() {
+    public String getContentTableName() {
         return this.vectorTableName + "_content";
     }
 
-    private String getQueryTableName() {
+    public String getQueryTableName() {
         return this.vectorTableName + "_query";
+    }
+
+    public JdbcTemplate getJdbcTemplate() {
+        return jdbcTemplate;
     }
 
     public static class Builder {
@@ -353,6 +350,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         @Nullable
         private VectorStoreObservationConvention searchObservationConvention;
         private PlatformTransactionManager transactionManager = null;
+        private DocumentRetrievalStrategy documentRetrievalStrategy = null;
 
         public Builder(JdbcTemplate jdbcTemplate, EmbeddingModel embeddingModel) {
             this.removeExistingVectorStoreTable = false;
@@ -382,7 +380,10 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
             this.initializeSchema = initializeSchema;
             return this;
         }
-
+        public Builder withDocumentRetrevialStrategy (DocumentRetrievalStrategy documentRetrievalStrategy) {
+            this.documentRetrievalStrategy = documentRetrievalStrategy;
+            return this;
+        }
         public Builder withObservationRegistry(ObservationRegistry observationRegistry) {
             this.observationRegistry = observationRegistry;
             return this;
@@ -404,7 +405,7 @@ public class YellowBrickVectorStore extends AbstractObservationVectorStore imple
         }
 
         public YellowBrickVectorStore build() {
-            return new YellowBrickVectorStore( this.vectorTableName, this.jdbcTemplate, this.embeddingModel, this.initializeSchema,this.removeExistingVectorStoreTable, this.observationRegistry, this.searchObservationConvention, this.batchingStrategy, this.maxDocumentBatchSize, this.transactionManager);
+            return new YellowBrickVectorStore( this.vectorTableName, this.jdbcTemplate, this.embeddingModel, this.initializeSchema,this.removeExistingVectorStoreTable, this.observationRegistry, this.searchObservationConvention, this.batchingStrategy, this.maxDocumentBatchSize, this.transactionManager, this.documentRetrievalStrategy);
         }
 
     }
